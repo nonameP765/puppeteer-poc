@@ -4,6 +4,8 @@ import { verbose } from 'sqlite3';
 const sqlite3 = verbose();
 const db = new sqlite3.Database('./words.sqlite3');
 
+type GameMode = 'manner' | 'long' | 'noManner';
+
 db.serialize(() => {
   (async () => {
     const browser = await puppeteer.launch({
@@ -14,10 +16,7 @@ db.serialize(() => {
     await page.goto('https://kkutu.io/login');
     await page.setViewport({ width: 1080, height: 1024 });
 
-    let isTyped = false;
-
     const inputAndSubmit = async (value: string) => {
-      isTyped = true;
       const inputs = await page.$$('input.chat-input');
 
       await Promise.all(
@@ -32,7 +31,6 @@ db.serialize(() => {
           }
         })
       );
-      isTyped = false;
     };
 
     const getIsMyTurn = async () => {
@@ -65,10 +63,14 @@ db.serialize(() => {
             const text = (await div.evaluate((el) => el.textContent)) || '';
             const startChar = (() => {
               if (text.includes('(') && text.includes(')')) {
-                return [
-                  text.slice(0, text.indexOf('(')),
-                  text.slice(text.indexOf('(') + 1, text.indexOf(')'))
-                ];
+                const start = text.slice(0, text.indexOf('('));
+                const changed = text.slice(text.indexOf('(') + 1, text.indexOf(')'));
+
+                db.run(`INSERT INTO change VALUES ("${start}", "${changed}")`, () => {
+                  // pass
+                });
+
+                return [start, changed];
               }
               if (text.length === 1) {
                 return [text];
@@ -105,16 +107,22 @@ db.serialize(() => {
       const temp = `${text}`;
       db.get(`SELECT text FROM korean WHERE text="${temp}"`, (err, row) => {
         if (!row || err) {
-          db.run('INSERT INTO korean VALUES (?, ?, ?)', temp, temp[0], 1);
+          db.run(
+            'INSERT INTO korean VALUES (NULL, ?, ?, ?, ?)',
+            temp,
+            temp[0],
+            temp[temp.length - 1],
+            1
+          );
         }
       });
     };
     const removeOnDB = (text: string) => {
       const temp = `${text}`;
-      db.run(`UPDATE korean SET isNew = -1 WHERE text="${temp}"`);
+      db.run(`DELETE FROM korean WHERE text="${temp}"`);
     };
 
-    const run = async () => {
+    const run = async (gameMode: GameMode) => {
       if (page.url().startsWith('https://kkutu.io/?server=')) {
         const isMyTurn = await getIsMyTurn();
         const displayInfo = await getDisplayInfo();
@@ -129,62 +137,240 @@ db.serialize(() => {
         } else if (isMyTurn) {
           if (displayInfo.isFail && beforeFailText !== displayInfo.text) {
             beforeFailText = displayInfo.text;
-            console.log(displayInfo.text);
             if (!displayInfo.text.includes(':')) {
               removeOnDB(displayInfo.text);
             }
           }
 
-          if (!isTyped && displayInfo.startChar) {
-            db.get(
-              `SELECT text 
-                    FROM korean
-                    WHERE startChar IN (${displayInfo.startChar
-                      .map((char) => `"${char}"`)
-                      .join(',')})
-                    AND text NOT IN (${Array.from(usedWords)
-                      .map((word) => `"${word}"`)
-                      .join(',')})
-                    AND isNew >= 0
-                    ORDER BY RANDOM()
-                    LIMIT 1;`,
-              //                     ORDER BY LENGTH(text) DESC
-              (err, row) => {
-                if (err) {
-                  console.error(err);
-                  return;
-                }
+          if (displayInfo.startChar) {
+            if (
+              displayInfo.text.length > 1 &&
+              !displayInfo.text.includes('(') &&
+              !displayInfo.text.includes(')') &&
+              !displayInfo.text.includes('... T.T') &&
+              !displayInfo.text.includes(':')
+            ) {
+              if (
+                !displayInfo.text.startsWith(beforeText) &&
+                !usedWords.has(beforeText) &&
+                !displayInfo.isFail
+              ) {
+                usedWords.add(beforeText);
+                saveOnDB(beforeText);
+              }
+              beforeText = displayInfo.text;
+            }
 
-                if (row) {
+            const { startChar } = displayInfo;
+            if (gameMode === 'manner') {
+              const row1 = await new Promise((resolve) => {
+                db.get(
+                  `
+                  SELECT k1.text
+                  FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
+                    .map((char) => `"${char}"`)
+                    .join(',')})) k1
+                  LEFT JOIN change c1 ON c1.start = k1.endChar
+                  JOIN korean k2 ON k1.endChar = k2.startChar OR c1.changed = k2.startChar
+                  WHERE
+                   k1.text NOT IN (${Array.from(usedWords)
+                     .map((word) => `"${word}"`)
+                     .join(',')})
+                   k2.text NOT IN (${Array.from(usedWords)
+                     .map((word) => `"${word}"`)
+                     .join(',')})
+                    ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                  GROUP BY k1.id
+                  ORDER BY COUNT(k2.id) ASC, LENGTH(k1.text) DESC
+                  LIMIT 1
+                  `,
+                  (err, row) => {
+                    if (err || !row) {
+                      resolve(null);
+                    }
+
+                    if (row) {
+                      resolve(row);
+                    }
+                  }
+                );
+              });
+
+              if (row1) {
+                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                // @ts-ignore
+                if ('text' in row1 && typeof row1.text === 'string') {
+                  await inputAndSubmit(row1.text);
+                  usedWords.add(row1.text);
+                }
+              }
+            }
+
+            if (gameMode === 'noManner') {
+              const row1 = await new Promise((resolve) => {
+                db.get(
+                  `
+                SELECT k1.text
+                FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
+                  .map((char) => `"${char}"`)
+                  .join(',')})) k1
+                LEFT JOIN change c1 ON c1.start = k1.endChar
+                JOIN korean k2 ON k1.endChar = k2.startChar OR c1.changed = k2.startChar
+                WHERE
+                 k1.text NOT IN (${Array.from(usedWords)
+                   .map((word) => `"${word}"`)
+                   .join(',')})
+                 AND k2.text NOT IN (${Array.from(usedWords)
+                   .map((word) => `"${word}"`)
+                   .join(',')})
+                  ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                GROUP BY k1.id
+                ORDER BY COUNT(k2.id) ASC, LENGTH(k1.text) DESC
+                LIMIT 1
+                `,
+                  (err, row) => {
+                    if (err || !row) {
+                      resolve(null);
+                    } else if (row) {
+                      resolve(row);
+                    }
+                  }
+                );
+              });
+
+              if (row1) {
+                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                // @ts-ignore
+                if ('text' in row1 && typeof row1.text === 'string') {
+                  await inputAndSubmit(row1.text);
+                  usedWords.add(row1.text);
+                }
+              }
+            }
+
+            if (gameMode === 'long') {
+              const row1 = await new Promise((resolve) => {
+                db.get(
+                  `
+                    SELECT text 
+                    FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
+                      .map((char) => `"${char}"`)
+                      .join(',')})) k1
+                    LEFT JOIN change c1 ON c1.start = k1.endChar
+                    WHERE 
+                      NOT EXISTS(
+                        SELECT startChar
+                        FROM korean k2
+                        WHERE 
+                          (
+                            k2.startChar = k1.endChar
+                            OR k2.startChar = c1.changed
+                          )
+                          AND LENGTH(k2.text) > LENGTH(k1.text)
+                          AND text NOT IN (${Array.from(usedWords)
+                            .map((word) => `"${word}"`)
+                            .join(',')})
+                        LIMIT 1
+                      )
+                      AND EXISTS(
+                        SELECT startChar
+                        FROM korean k3
+                        WHERE 
+                          (
+                            k3.startChar = k1.endChar
+                            OR k3.startChar = c1.changed
+                          )
+                        LIMIT 1
+                      )
+                      AND text NOT IN (${Array.from(usedWords)
+                        .map((word) => `"${word}"`)
+                        .join(',')})
+                      ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                    ORDER BY LENGTH(text) DESC
+                    LIMIT 1;`,
+                  (err, row) => {
+                    if (err || !row) {
+                      resolve(null);
+                    }
+                    resolve(row);
+                  }
+                );
+              });
+              if (row1) {
+                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                // @ts-ignore
+                if ('text' in row1 && typeof row1.text === 'string') {
+                  await inputAndSubmit(row1.text);
+                  usedWords.add(row1.text);
+                }
+              } else {
+                const row2 = await new Promise((resolve) => {
+                  db.get(
+                    `
+                    SELECT k1.text
+                    FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
+                      .map((char) => `"${char}"`)
+                      .join(',')})) k1
+                    LEFT JOIN change c1 ON c1.start = k1.endChar
+                    JOIN korean k2 ON k1.endChar = k2.startChar OR c1.changed = k2.startChar
+                    WHERE
+                     k1.text NOT IN (${Array.from(usedWords)
+                       .map((word) => `"${word}"`)
+                       .join(',')})
+                      ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                    GROUP BY k1.id
+                    ORDER BY COUNT(k2.id) ASC, LENGTH(k1.text) DESC
+                    LIMIT 1
+                    `,
+                    (err, row) => {
+                      if (err || !row) {
+                        resolve(null);
+                      }
+
+                      if (row) {
+                        resolve(row);
+                      }
+                    }
+                  );
+                });
+
+                if (row2) {
                   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
                   // @ts-ignore
-                  if ('text' in row && typeof row.text === 'string') {
-                    inputAndSubmit(row.text);
-                    usedWords.add(row.text);
+                  if ('text' in row2 && typeof row2.text === 'string') {
+                    await inputAndSubmit(row2.text);
+                    usedWords.add(row2.text);
                   }
                 }
               }
-            );
+            }
           }
         } else if (
           displayInfo.text.length > 1 &&
           !displayInfo.text.includes('(') &&
-          !displayInfo.text.includes(')')
+          !displayInfo.text.includes(')') &&
+          !displayInfo.text.includes('... T.T') &&
+          !displayInfo.text.includes(':')
         ) {
-          if (!displayInfo.text.startsWith(beforeText) && !usedWords.has(beforeText)) {
+          if (
+            !displayInfo.text.startsWith(beforeText) &&
+            !usedWords.has(beforeText) &&
+            !displayInfo.isFail
+          ) {
             usedWords.add(beforeText);
             saveOnDB(beforeText);
           }
           beforeText = displayInfo.text;
         }
       }
+
       await new Promise((resolve) => {
-        setTimeout(resolve, 10);
+        setTimeout(resolve, 25);
       });
 
-      run();
+      run(gameMode);
     };
 
-    run();
+    run((process.argv[2] as GameMode) || 'long');
   })();
 });

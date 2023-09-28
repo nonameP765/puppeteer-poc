@@ -4,7 +4,9 @@
   "scripts": {
     "tsc": "tsc",
     "lint": "eslint --ext .ts .",
-    "start": "ts-node index.ts"
+    "start:manner": "ts-node index.ts manner",
+    "start:noManner": "ts-node index.ts noManner",
+    "start:long": "ts-node index.ts long"
   },
   "devDependencies": {
     "@types/node": "^20.7.0",
