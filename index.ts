@@ -4,7 +4,7 @@ import { verbose } from 'sqlite3';
 const sqlite3 = verbose();
 const db = new sqlite3.Database('./words.sqlite3');
 
-type GameMode = 'manner' | 'long' | 'noManner';
+type GameMode = 'manner' | 'mannerLong' | 'noManner';
 
 db.serialize(() => {
   (async () => {
@@ -166,22 +166,35 @@ db.serialize(() => {
               const row1 = await new Promise((resolve) => {
                 db.get(
                   `
-                  SELECT k1.text
-                  FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
-                    .map((char) => `"${char}"`)
-                    .join(',')})) k1
+                  SELECT 
+                  k1.text,
+                  (
+                    SELECT 
+                      COUNT(k2.id)
+                      FROM korean k2
+                      WHERE ( 
+                          k2.startChar = k1.endChar
+                          OR k2.startChar = c1.changed
+                        ) AND k2.text NOT IN (${Array.from(usedWords)
+                          .map((word) => `"${word}"`)
+                          .join(',')}) 
+                  ) AS count
+                  FROM ( 
+                    SELECT *
+                    FROM korean k0
+                    WHERE
+                      k0.text NOT IN (${Array.from(usedWords)
+                        .map((word) => `"${word}"`)
+                        .join(',')})
+                      AND k0.startChar IN (${startChar.map((char) => `"${char}"`).join(',')})
+                    GROUP BY k0.endChar
+                  ) k1
                   LEFT JOIN change c1 ON c1.start = k1.endChar
-                  JOIN korean k2 ON k1.endChar = k2.startChar OR c1.changed = k2.startChar
-                  WHERE
-                   k1.text NOT IN (${Array.from(usedWords)
-                     .map((word) => `"${word}"`)
-                     .join(',')})
-                   k2.text NOT IN (${Array.from(usedWords)
-                     .map((word) => `"${word}"`)
-                     .join(',')})
-                    ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                  LEFT JOIN korean k3 ON k3.startChar = k1.endChar OR c1.changed = k3.startChar
+                  WHERE k3.id IS NOT NULL
+                  ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
                   GROUP BY k1.id
-                  ORDER BY COUNT(k2.id) ASC, LENGTH(k1.text) DESC
+                  ORDER BY count ASC, LENGTH(k1.text) DESC
                   LIMIT 1
                   `,
                   (err, row) => {
@@ -200,6 +213,9 @@ db.serialize(() => {
                 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
                 // @ts-ignore
                 if ('text' in row1 && typeof row1.text === 'string') {
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, (row1.text as string).length * 200 + 500);
+                  });
                   await inputAndSubmit(row1.text);
                   usedWords.add(row1.text);
                 }
@@ -210,22 +226,33 @@ db.serialize(() => {
               const row1 = await new Promise((resolve) => {
                 db.get(
                   `
-                SELECT k1.text
-                FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
-                  .map((char) => `"${char}"`)
-                  .join(',')})) k1
+                SELECT 
+                  k1.text,
+                  (
+                    SELECT 
+                      COUNT(k2.id)
+                      FROM korean k2
+                      WHERE ( 
+                          k2.startChar = k1.endChar
+                          OR k2.startChar = c1.changed
+                        ) AND k2.text NOT IN (${Array.from(usedWords)
+                          .map((word) => `"${word}"`)
+                          .join(',')}) 
+                  ) AS count
+                FROM ( 
+                  SELECT *
+                  FROM korean k0
+                  WHERE
+                    k0.text NOT IN (${Array.from(usedWords)
+                      .map((word) => `"${word}"`)
+                      .join(',')})
+                    AND k0.startChar IN (${startChar.map((char) => `"${char}"`).join(',')})
+                  GROUP BY k0.endChar
+                ) k1
                 LEFT JOIN change c1 ON c1.start = k1.endChar
-                JOIN korean k2 ON k1.endChar = k2.startChar OR c1.changed = k2.startChar
-                WHERE
-                 k1.text NOT IN (${Array.from(usedWords)
-                   .map((word) => `"${word}"`)
-                   .join(',')})
-                 AND k2.text NOT IN (${Array.from(usedWords)
-                   .map((word) => `"${word}"`)
-                   .join(',')})
-                  ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                ${usedWords.size === 0 ? 'WHERE LENGTH(k1.text) <= 30' : ''}
                 GROUP BY k1.id
-                ORDER BY COUNT(k2.id) ASC, LENGTH(k1.text) DESC
+                ORDER BY count ASC, LENGTH(k1.text) DESC
                 LIMIT 1
                 `,
                   (err, row) => {
@@ -248,98 +275,108 @@ db.serialize(() => {
               }
             }
 
-            if (gameMode === 'long') {
-              const row1 = await new Promise((resolve) => {
+            if (gameMode === 'mannerLong') {
+              const row1 = await new Promise<{ text: string; count: number } | null>((resolve) => {
                 db.get(
                   `
-                    SELECT text 
-                    FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
-                      .map((char) => `"${char}"`)
-                      .join(',')})) k1
+                    SELECT 
+                      k1.text,
+                      (
+                        SELECT 
+                          COUNT(k2.id)
+                          FROM korean k2
+                          WHERE ( 
+                              k2.startChar = k1.endChar
+                              OR k2.startChar = c1.changed
+                            ) AND k2.text NOT IN (${Array.from(usedWords)
+                              .map((word) => `"${word}"`)
+                              .join(',')}) 
+                      ) AS count
+                    FROM ( 
+                      SELECT *
+                      FROM korean k0
+                      WHERE
+                        k0.text NOT IN (${Array.from(usedWords)
+                          .map((word) => `"${word}"`)
+                          .join(',')})
+                        AND k0.startChar IN (${startChar.map((char) => `"${char}"`).join(',')})
+                      GROUP BY k0.endChar
+                    ) k1
                     LEFT JOIN change c1 ON c1.start = k1.endChar
+                    LEFT JOIN korean k3 ON k3.startChar = k1.endChar OR c1.changed = k3.startChar
+                    WHERE
+                      k3.id IS NOT NULL
+                    ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
+                    GROUP BY k1.id
+                    ORDER BY count ASC, LENGTH(k1.text) DESC
+                    LIMIT 1
+                    `,
+                  (err, row) => {
+                    if (err || !row) {
+                      resolve(null);
+                    }
+
+                    if (row) {
+                      resolve(row as { text: string; count: number });
+                    }
+                  }
+                );
+              });
+
+              if (row1) {
+                if (row1.count <= 5) {
+                  await inputAndSubmit(row1.text);
+                  usedWords.add(row1.text);
+                } else {
+                  const row2 = await new Promise<{ text: string } | null>((resolve) => {
+                    db.get(
+                      `
+                    SELECT k1.text 
+                    FROM (
+                      SELECT *
+                      FROM korean k0
+                      WHERE 
+                        k0.startChar IN (${startChar.map((char) => `"${char}"`).join(',')})
+                        AND k0.text NOT IN (${Array.from(usedWords)
+                          .map((word) => `"${word}"`)
+                          .join(',')})
+                    ) k1
+                    LEFT JOIN change c1 ON c1.start = k1.endChar
+                    LEFT JOIN korean k3 ON k1.endChar = k3.startChar OR c1.changed = k3.startChar
                     WHERE 
                       NOT EXISTS(
-                        SELECT startChar
+                        SELECT k2.id
                         FROM korean k2
                         WHERE 
                           (
                             k2.startChar = k1.endChar
                             OR k2.startChar = c1.changed
                           )
-                          AND LENGTH(k2.text) > LENGTH(k1.text)
+                          AND LENGTH(k2.text) >= LENGTH(k1.text)
                           AND text NOT IN (${Array.from(usedWords)
                             .map((word) => `"${word}"`)
                             .join(',')})
                         LIMIT 1
                       )
-                      AND EXISTS(
-                        SELECT startChar
-                        FROM korean k3
-                        WHERE 
-                          (
-                            k3.startChar = k1.endChar
-                            OR k3.startChar = c1.changed
-                          )
-                        LIMIT 1
-                      )
-                      AND text NOT IN (${Array.from(usedWords)
-                        .map((word) => `"${word}"`)
-                        .join(',')})
+                      AND k3.id IS NOT NULL
                       ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
-                    ORDER BY LENGTH(text) DESC
+                    ORDER BY LENGTH(k1.text) DESC
                     LIMIT 1;`,
-                  (err, row) => {
-                    if (err || !row) {
-                      resolve(null);
-                    }
-                    resolve(row);
-                  }
-                );
-              });
-              if (row1) {
-                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                // @ts-ignore
-                if ('text' in row1 && typeof row1.text === 'string') {
-                  await inputAndSubmit(row1.text);
-                  usedWords.add(row1.text);
-                }
-              } else {
-                const row2 = await new Promise((resolve) => {
-                  db.get(
-                    `
-                    SELECT k1.text
-                    FROM (SELECT * FROM korean k0 WHERE k0.startChar IN (${startChar
-                      .map((char) => `"${char}"`)
-                      .join(',')})) k1
-                    LEFT JOIN change c1 ON c1.start = k1.endChar
-                    JOIN korean k2 ON k1.endChar = k2.startChar OR c1.changed = k2.startChar
-                    WHERE
-                     k1.text NOT IN (${Array.from(usedWords)
-                       .map((word) => `"${word}"`)
-                       .join(',')})
-                      ${usedWords.size === 0 ? 'AND LENGTH(k1.text) <= 30' : ''}
-                    GROUP BY k1.id
-                    ORDER BY COUNT(k2.id) ASC, LENGTH(k1.text) DESC
-                    LIMIT 1
-                    `,
-                    (err, row) => {
-                      if (err || !row) {
-                        resolve(null);
+                      (err, row) => {
+                        if (err || !row) {
+                          resolve(null);
+                        }
+                        resolve(row as { text: string });
                       }
+                    );
+                  });
 
-                      if (row) {
-                        resolve(row);
-                      }
-                    }
-                  );
-                });
-
-                if (row2) {
-                  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                  // @ts-ignore
-                  if ('text' in row2 && typeof row2.text === 'string') {
+                  if (row2) {
                     await inputAndSubmit(row2.text);
                     usedWords.add(row2.text);
+                  } else {
+                    await inputAndSubmit(row1.text);
+                    usedWords.add(row1.text);
                   }
                 }
               }
@@ -371,6 +408,6 @@ db.serialize(() => {
       run(gameMode);
     };
 
-    run((process.argv[2] as GameMode) || 'long');
+    run((process.argv[2] as GameMode) || 'mannerLong');
   })();
 });

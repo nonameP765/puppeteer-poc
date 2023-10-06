@@ -6,7 +6,7 @@
     "lint": "eslint --ext .ts .",
     "start:manner": "ts-node index.ts manner",
     "start:noManner": "ts-node index.ts noManner",
-    "start:long": "ts-node index.ts long"
+    "start:mannerLong": "ts-node index.ts mannerLong"
   },
   "devDependencies": {
     "@types/node": "^20.7.0",
